@@ -1,0 +1,800 @@
+---
+title: "House Prices - Advanced Regression Techniques"
+format:
+  html:
+    code-fold: true
+    code-summary: "Show the code"
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, 
+                      warning=FALSE, 
+                      message=FALSE,
+                      fig.align = 'center')
+```  
+
+
+# Import Packages
+```{r, echo = F}
+library(tidyverse)
+library(kableExtra)
+library(ggplot2)
+library(MASS) 
+library(stats)
+library(cowplot)
+library(plotly)
+```
+
+# Basic Data Exploration 
+
+## Import the data
+
+```{r, echo = F}
+train <- read_csv(here::here("data/train.csv"))
+test <- read_csv(here::here("data/test.csv"))
+```
+
+**NOTE**: Before diving into, we realised that for some factor variables, there are values appear in test dataset but not train dataset. Thus, data pre-processing separately will incur low accuracy predicted value later on. The approach for this is to combine two dataset into one, apply all data pre-processing and then finally separate it before model fitting.
+
+
+```{r}
+test$SalePrice <- NA
+combined_data <- rbind(train, test)
+```
+
+## Summary Statistics
+
+```{r, echo = F}
+dim(train)
+```
+
+Dimension of train data is `r dim(train)[1]` rows and `r dim(train)[2]` columns
+
+Dimension of test data is `r dim(test)[1]` rows and `r dim(test)[2]` columns
+
+Dimension of combined data is `r dim(combined_data)[1]` rows and `r dim(combined_data)[2]` columns
+
+* **NOTE**: Before running summary statistics for numerical and factor variable, we need to re-categorise few numerical features based on metadata. For example, MSSubClass has numerical values, but each values represent a category, or OverallQual or OverallCond, etc. Refer to the metadata for more information.
+
+```{r}
+# List of variable names to be converted to factor
+factor_vars <- c("MSSubClass", "OverallQual", "OverallCond",
+                 "BsmtFullBath", "BsmtHalfBath", "FullBath", "GarageCars", "HalfBath", "BedroomAbvGr", 
+                 "KitchenAbvGr", "TotRmsAbvGrd", "Fireplaces")
+
+# Convert specified variables to the factor class
+combined_data[, factor_vars] <- lapply(combined_data[, factor_vars], as.factor)
+```
+
+
+### Numeric Variable
+
+```{r, results='asis'}
+# Filter out numerical variables from train dataset and set it into a new df
+numerical_dat <- combined_data[, sapply(combined_data, is.numeric)]
+
+# Create an empty dataframe to store results
+numerical_summary <- data.frame(
+  Variable = character(0),
+  Min = numeric(0),
+  Quartile_1 = numeric(0),
+  Median = numeric(0),
+  Mean = numeric(0),
+  Quartile_3 = numeric(0),
+  Max = numeric(0),
+  stringsAsFactors = FALSE
+)
+
+# Create summary statistics table for numerical variables
+for (i in 2:ncol(numerical_dat)) {
+  x <- numerical_dat[, i]
+  
+  # Calculate summary statistics using summary()
+  summary_result <- summary(x)
+  
+  # Define a regular expression pattern to match the numeric value
+  pattern <- "-?\\d+\\.?\\d*"
+  
+  # Create a data frame for the current numerical variable
+  result_df <- data.frame(
+    Variable = names(x),
+    Min = regmatches(summary_result[1], gregexpr(pattern, summary_result[1], perl=TRUE))[[1]],
+    Quartile_1 = regmatches(summary_result[2], gregexpr(pattern, summary_result[2],perl=TRUE))[[1]][2],
+    Median = regmatches(summary_result[3], gregexpr(pattern, summary_result[3], perl=TRUE))[[1]],
+    Mean = regmatches(summary_result[4], gregexpr(pattern, summary_result[4], perl=TRUE))[[1]],
+    Quartile_3 = regmatches(summary_result[5], gregexpr(pattern, summary_result[5],perl=TRUE))[[1]][2],
+    Max = regmatches(summary_result[6], gregexpr(pattern, summary_result[6], perl=TRUE))[[1]],
+    stringsAsFactors = FALSE
+  )
+  
+  # Bind the result to the summary dataframe
+  numerical_summary <- rbind(numerical_summary, result_df)
+}
+
+# Set row names to be the names of the numerical variables
+rownames(numerical_summary) <- numerical_summary$Variable
+numerical_summary <- numerical_summary[, -1]
+
+# Creating a scrollable HTML table
+html_numerical_table <- kable(numerical_summary, "html") %>%
+  kable_styling(full_width = FALSE) %>%
+  as.character()
+
+# Creating scrollable div
+html_numerical_output <- paste0(
+  '<div style="max-height: 400px; overflow-y: auto;" id="NumericVar">',
+  '<p>Summary statistics of numerical features</p>',
+  html_numerical_table,
+  '</div>'
+)
+
+cat(html_numerical_output)
+
+```
+
+### Factor Variable
+
+```{r,  results='asis'}
+# Convert all character variables to factor variables
+combined_data[, sapply(combined_data, is.character)] <- lapply(combined_data[, sapply(combined_data, is.character)], as.factor)
+
+# Filter out factor variables from train dataset and set it into new df
+factor_dat <- combined_data[, sapply(combined_data, is.factor)]
+
+# Create an empty dataframe to store results
+factor_summary <- data.frame(
+  Factor_Variable = character(0),
+  Count = numeric(0),
+  Unique = numeric(0),
+  Mode = character(0),
+  Frequency = numeric(0),
+  stringsAsFactors = FALSE
+)
+
+# Create summary statistics table for factor variables
+for (i in 1:ncol(factor_dat)) {
+  x <- factor_dat[, i]
+  
+  # Get distinct values
+  unique_values <- unique(x)
+  
+  # Generate frequency table
+  table_result <- table(factor_dat[, i])
+
+  # Remove NAs from the result
+  table_result <- table_result[!is.na(names(table_result))]
+
+  # Find the level with the highest frequency
+  mode <- names(which.max(table_result))
+  
+  # Frequency of the mode values
+  mode_freq <- sum(x == mode, na.rm = TRUE)
+  
+  # Create a data frame for the current factor variable
+  result_df <- data.frame(
+    Factor_Variable = names(factor_dat)[i],
+    Count = sum(!is.na(x)),
+    Unique = sum(!is.na(unique_values)),
+    Mode = mode,
+    Frequency = mode_freq,
+    stringsAsFactors = FALSE
+  )
+  
+  # Bind the result to the summary dataframe
+  factor_summary <- rbind(factor_summary, result_df)
+}
+
+# Set row names to be the names of the factor variables
+rownames(factor_summary) <- factor_summary$Factor_Variable
+factor_summary <- factor_summary[, -1]
+
+# Creating a scrollable HTML table
+html_categorical_table <- kable(factor_summary, "html") %>%
+  kable_styling(full_width = FALSE) %>%
+  as.character()
+
+# Creating scrollable div
+html_categorical_output <- paste0(
+  '<div style="max-height: 400px; overflow-y: auto;" id="NumericVar">',
+  '<p>Summary statistics of factor features</p>',
+  html_categorical_table,
+  '</div>'
+)
+
+cat(html_categorical_output)
+```
+
+
+## Checking null values
+
+### Inspecting
+```{r, results = 'asis'}
+null <- data.frame(colSums(is.na(combined_data)))
+colnames(null) <- c( "Number of null values")
+null <- cbind(null, Percentage = round(colSums(is.na(combined_data)) / nrow(combined_data) * 100, 2))
+
+# Creating a scrollable HTML table
+html_null_table <- kable(null, "html") %>%
+  kable_styling(full_width = FALSE) %>%
+  as.character()
+
+# Creating scrollable div
+html_null_output <- paste0(
+  '<div style="max-height: 400px; overflow-y: auto;" id="NumericVar">',
+  '<p>Null values for each variable</p>',
+  html_null_table,
+  '</div>'
+)
+
+cat(html_null_output)
+```
+
+
+
+### Dealing with null values
+
+* For features with number of null values higher than 50% observation, we will drop that feature.
+
+Features which have proportion of null greater than 50% are: 
+```{r}
+kable(subset(null, Percentage > 50))
+```
+
+The reason here may be due to these features is luxury and thus not common for the majority of property. However, if a property has one or more of these features, sale price will normally be higher. 
+
+For example, 
+
+* Property **with pool**, not considering quality has mean sale price of `r paste("$",round(mean(train[!is.na(train$PoolQC), ]$SalePrice), 1), sep = "")`, compared to `r paste("$",round(mean(train[is.na(train$PoolQC), ]$SalePrice), 1), sep = "")` when there is **no pool**.
+
+However, the number of null values in all these features is too high and will affect regression output later on. We still decide to *drop* these features.
+
+```{r, echo = T}
+#| code-fold: true
+#| code-summary: "Drop features"
+combined_data <- combined_data %>% 
+  dplyr::select(-c("Alley", "PoolQC", "Fence", "MiscFeature"))
+```
+
+**Now**, moving on to features will proportion of null values *less than 50%*.
+
+* For numerical features, null values will be replaced by *mean*.
+
+* For factor features, null values will be replaced by *mode*.
+
+** However, note that for factor features referring to basement, e.g. BsmtQual, BsmtCond, etc., NA value is equivalent to **No Basement**, and thus we will replace NA values with None. The same method applies for *FirePlaceQu* and *Garage-related* features.
+
+### Numerical Features
+```{r}
+#| code-fold: true
+#| code-summary: "Replace with mean"
+#| echo: true
+combined_data$LotFrontage[is.na(combined_data$LotFrontage)] <- mean(combined_data$LotFrontage, na.rm = T)
+combined_data$MasVnrArea[is.na(combined_data$MasVnrArea)] <- mean(combined_data$MasVnrArea, na.rm = T)
+combined_data$BsmtFinSF1[is.na(combined_data$BsmtFinSF1)] <- mean(combined_data$BsmtFinSF1, na.rm = T)
+combined_data$BsmtFinSF2[is.na(combined_data$BsmtFinSF2)] <- mean(combined_data$BsmtFinSF2, na.rm = T)
+combined_data$BsmtUnfSF[is.na(combined_data$BsmtUnfSF)] <- mean(combined_data$BsmtUnfSF, na.rm = T)
+combined_data$TotalBsmtSF[is.na(combined_data$TotalBsmtSF)] <- mean(combined_data$TotalBsmtSF, na.rm = T)
+combined_data$GarageArea[is.na(combined_data$GarageArea)] <- mean(combined_data$GarageArea, na.rm = T)
+
+
+```
+
+### Factor Features
+```{r}
+#| code-fold: true
+#| code-summary: "Replace with mode"
+#| echo: true
+fill_na <- function(data, column_name) {
+  # Generate frequency table
+  table_result <- table(data[[column_name]])
+
+  # Remove NAs from the result
+  table_result <- table_result[!is.na(names(table_result))]
+
+  # Find the level with the highest frequency
+  mode <- names(which.max(table_result))
+
+  # Replace NA values in the specified column with mode
+  data[[column_name]] <- replace(data[[column_name]], is.na(data[[column_name]]), mode)
+  
+  return(data)
+}
+
+# Call the function with the train dataset 
+combined_data <- fill_na(data = combined_data, column_name = "MasVnrType")
+combined_data <- fill_na(data = combined_data, column_name = "Electrical")
+combined_data <- fill_na(data = combined_data, column_name = "MSZoning")
+combined_data <- fill_na(data = combined_data, column_name = "Utilities")
+combined_data <- fill_na(data = combined_data, column_name = "Exterior1st")
+combined_data <- fill_na(data = combined_data, column_name = "Exterior2nd")
+combined_data <- fill_na(data = combined_data, column_name = "SaleType")
+combined_data <- fill_na(data = combined_data, column_name = "GarageCars")
+combined_data <- fill_na(data = combined_data, column_name = "Functional")
+combined_data <- fill_na(data = combined_data, column_name = "KitchenQual")
+combined_data <- fill_na(data = combined_data, column_name = "BsmtFullBath")
+combined_data <- fill_na(data = combined_data, column_name = "BsmtHalfBath")
+```
+
+```{r}
+#| code-fold: true
+#| code-summary: "Replace with None"
+#| echo: true
+replace_na_with_none <- function(data, column_name) {
+  # Convert factor column to character
+  data[[column_name]] <- as.character(data[[column_name]])
+  
+  # Replace NA values with "None"
+  data[[column_name]][is.na(data[[column_name]])] <- "None"
+  
+  # Convert back to factor column
+  data[[column_name]] <- factor(data[[column_name]])
+  
+  return(data)
+}
+
+combined_data <- replace_na_with_none(combined_data, "BsmtQual")
+combined_data <- replace_na_with_none(combined_data, "BsmtCond")
+combined_data <- replace_na_with_none(combined_data, "BsmtExposure")
+combined_data <- replace_na_with_none(combined_data, "BsmtFinType1")
+combined_data <- replace_na_with_none(combined_data, "BsmtFinType2")
+combined_data <- replace_na_with_none(combined_data, "FireplaceQu")
+combined_data <- replace_na_with_none(combined_data, "GarageType")
+combined_data <- replace_na_with_none(combined_data, "GarageQual")
+combined_data <- replace_na_with_none(combined_data, "GarageCond")
+
+```
+
+```{r}
+combined_data <- combined_data %>%
+  select(-c(GarageYrBlt, GarageFinish))
+```
+
+
+**Now**, we check again to ensure all NA values are solved.
+
+```{r, results = 'asis'}
+null_2 <- data.frame(colSums(is.na(combined_data)))
+colnames(null_2) <- c("Number of null values")
+
+# Creating a scrollable HTML table
+html_null_table_2 <- kable(null_2, "html") %>%
+  kable_styling(full_width = FALSE) %>%
+  as.character()
+
+# Creating scrollable div
+html_null_output_2 <- paste0(
+  '<div style="max-height: 400px; overflow-y: auto;" id="NumericVar">',
+  '<p>Null values for each variable</p>',
+  html_null_table_2,
+  '</div>'
+)
+
+cat(html_null_output_2)
+```
+
+```{r}
+# Separate the dataset
+n_train <- nrow(train)
+train_processed <- combined_data[1:n_train, ]
+test_processed <- combined_data[(n_train + 1):nrow(combined_data), ]
+```
+
+
+# Exploratory Data Analysis
+## Explore the dependent variable
+
+```{r}
+#| label: fig-dist
+#| fig-cap: "Histogram vs. Fitted Normal Distribution Plot"
+# Fit a normal distribution to the SalePrice data
+fit <- fitdistr(train_processed$SalePrice, densfun = "normal")
+mu <- fit$estimate[1]
+sigma <- fit$estimate[2]
+
+# Create a histogram of the SalePrice column
+hist_data <- ggplot(train_processed, aes(x = SalePrice)) +
+  geom_histogram(binwidth = 10000, fill = "purple", alpha = 0.75, aes(y = ..density..)) +
+  labs(title = "SalePrice Distribution",
+       x = "SalePrice",
+       y = "Density") +
+  theme_minimal()
+
+# Calculate the normal distribution based on the fitted parameters
+x_norm <- seq(min(train_processed$SalePrice), max(train_processed$SalePrice), length.out = 100)
+y_norm <- dnorm(x_norm, mean = mu, sd = sigma)
+
+# Create the normal distribution overlay
+norm_data <- data.frame(x = x_norm, y = y_norm) %>%
+  ggplot(aes(x = x, y = y)) +
+  geom_line(color = "green", size = 1) +
+  labs(title = paste("Fitted Normal Distribution (μ =", sprintf("%.2f", mu), ", σ =", sprintf("%.2f", sigma), ")"),
+       x = "SalePrice",
+       y = "Density") +
+  theme_minimal()
+
+# Combine the histogram and the overlay
+combined_plot <- hist_data + geom_line(data = data.frame(x = x_norm, y = y_norm),
+                                      aes(x = x, y = y, color = "Fitted Normal Distribution"),
+                                      color = "green", size = 1) +
+  labs(title = "SalePrice Distribution with Fitted Normal Distribution",
+       x = "SalePrice",
+       y = "Density") +
+  theme_minimal() +
+  scale_fill_manual(values = "purple") +
+  scale_color_manual(values = "green") +
+  guides(fill = guide_legend(title = NULL),
+         color = guide_legend(title = NULL))
+
+
+# Display the combined plot
+print(combined_plot)
+```
+
+As we can see in @fig-dist, the histogram does not match the fitted normal distribution, which indicates SalePrice does not follow Normal Distribution 
+
+
+## What questions do we want to ask of the data?
+### Distribution of dwelling types and their relation to sale prices?
+
+```{r}
+#| label: fig-dwelling
+#| fig-cap: "Building Type Frequency"
+# Create a summary table
+bldgtype_summary <- table(train_processed$BldgType)
+
+# Convert the summary table to a data frame
+bldgtype_df <- as.data.frame(bldgtype_summary)
+colnames(bldgtype_df) <- c('BldgType', 'Freq') 
+
+# Order the levels of BldgType in descending order based on the count
+bldgtype_df$Freq <- sort(bldgtype_df$Freq, decreasing = T)
+
+# Create a bar plot using ggplot2
+ggplot(bldgtype_df, aes(x = BldgType, y = Freq)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  geom_text(aes(label = Freq), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Distribution of Building Types",
+       x = "BldgType",
+       y = "Count") +
+  theme_minimal()
+
+```
+
+
+The @fig-dwelling indicates the most common building type is *Single-family detached* of `r bldgtype_df$Freq[1]`, which is reasonable. Most other building types are more luxury options.
+
+```{r}
+#| label: fig-dwellprice
+#| fig-cap: "Average Sale Price by Building Type"
+price_v_dwelling <- train_processed %>% 
+  group_by(BldgType) %>%
+  summarise(mean_price = mean(SalePrice))
+
+# Create a bar plot using ggplot2
+ggplot(price_v_dwelling, aes(x = BldgType, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "purple", color = "black") +
+  geom_text(aes(label = round(mean_price, 1)), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Average Sale Price by Building Type",
+       x = "Building Type",
+       y = "Sale Price ($)") +
+  theme_minimal()
+```
+
+
+The @fig-dwellprice indicates *Single-family detached* and *Townhouse End Unit* to be the building type with highest average sale price compared to the rest. 
+
+* **Single-family detached homes** are often the most common and desirable dwelling type, as they offer the most privacy and space compared to other options. Additionally, they typically command higher prices due to their standalone nature and larger lot sizes.
+
+* **Townhouse end units**, while less common, tend to be more expensive due to their desirable features such as increased privacy, additional windows, and sometimes extra yard space. The high average sale price for townhouse end units reflects their premium status in the market.
+
+
+### Does zoning impact sale price?
+
+```{r}
+#| label: fig-zoningprice
+#| fig-cap: "Average Sale Price by Zoning"
+price_v_zoning <- train_processed %>% 
+  group_by(MSZoning) %>%
+  summarise(mean_price = mean(SalePrice))
+
+# Create a bar plot using ggplot2
+ggplot(price_v_zoning, aes(x = MSZoning, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  geom_text(aes(label = round(mean_price, 1)), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Average Sale Price by Zoning",
+       x = "Zoning",
+       y = "Sale Price ($)") +
+  theme_minimal()
+```
+
+The @fig-zoningprice indicates *Floating Village Residential* and *Residential Low Density* have higher average sale price compared to other zoning type. 
+
+**Floating Village Residential (FV):**
+
+* FV zoning classification stands out with a noticeably higher average sale price.
+
+* This may suggest that properties in the Floating Village Residential zone are perceived as more desirable or have unique features that contribute to their higher market value.
+
+**Residential Low Density (RL):**
+
+* Similarly, properties in the Residential Low Density zone exhibit a higher average sale price.
+
+* RL zoning might indicate areas with larger lots or a more spacious residential layout, attracting buyers willing to pay a premium for increased privacy or larger property size.
+
+### Does street access types effect on sale price?
+
+```{r}
+#| label: fig-streetprice
+#| fig-cap: "Average Sale Price by Street Type"
+price_v_street <- train_processed %>% 
+  group_by(Street) %>%
+  summarise(mean_price = mean(SalePrice))
+
+# Create a bar plot using ggplot2
+ggplot(price_v_street, aes(x = Street, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "purple", color = "black") +
+  geom_text(aes(label = round(mean_price, 1)), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Average Sale Price by Street Type",
+       x = "Street Type",
+       y = "Sale Price ($)") +
+  theme_minimal()
+```
+
+The @fig-streeprice indicates properties with paved road access *(Pave)* exhibit an average sale price approximately **$50,000 higher** compared to those with gravel road access *(Grvl)*.
+
+* Paved roads typically offer smoother and more durable surfaces, providing convenience and ease of access, which may contribute to their perceived higher value.
+
+* Gravel roads may be associated with rural or less developed areas where infrastructure might not be as well-maintained or convenient.
+
+The natural of these two street types also indicates the infrastructure and the development state of the area, which also be realised in the sale price.
+
+
+### What is the Average sale price by property shape?
+
+```{r}
+#| label: fig-shapeprice
+#| fig-cap: "Average Sale Price by Property Shape"
+price_v_shape <- train_processed %>% 
+  group_by(LotShape) %>%
+  summarise(mean_price = mean(SalePrice))
+
+# Create a bar plot using ggplot2
+ggplot(price_v_shape, aes(x = LotShape, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "purple", color = "black") +
+  geom_text(aes(label = round(mean_price, 1)), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Average Sale Price by Property Shape",
+       x = "Property Shape",
+       y = "Sale Price ($)") +
+  theme_minimal()
+
+```
+
+The @fig-shapeprice does not show much difference in average price between property shape, but Moderately Irregular *(IR2)* property still has the highest average sale price.
+
+```{r}
+#| label: fig-contourprice
+#| fig-cap: "Average Sale Price by Property Contour"
+price_v_contour <- train_processed %>% 
+  group_by(LandContour) %>%
+  summarise(mean_price = mean(SalePrice))
+
+# Create a bar plot using ggplot2
+ggplot(price_v_contour, aes(x = LandContour, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "purple", color = "black") +
+  geom_text(aes(label = round(mean_price, 1)), vjust = -0.5, color = "black") +  # Display values on top of bars
+  labs(title = "Average Sale Price by Property Contour",
+       x = "Property Contour",
+       y = "Sale Price ($)") +
+  theme_minimal()
+```
+
+The @fig-contourprice suggests that hillside properties have the highest average sale price. However, this pricing trend is likely influenced by factors beyond just property flatness, as hillside properties are typically associated with luxury.
+
+### Is there a Correlation between Property Age and Sale Price
+
+```{r}
+train_processed <- train_processed %>%
+  mutate(PropAge = as.numeric(as.character(YrSold)) - as.numeric(as.character(YearBuilt)))
+
+age_price_corr <- cor(train_processed$PropAge, train_processed$SalePrice)
+
+ggplot(train_processed, aes(x = PropAge, y = SalePrice, color = PropAge)) +
+  geom_point() +
+  labs(title = "Scatter Plot of PropAge vs SalePrice",
+       x = "Property Age",
+       y = "Sale Price") +
+  geom_smooth(method = "lm") +
+  theme_minimal()
+```
+
+Correlation between Property Age and Sale Price is `r round(age_price_corr,4)`.
+
+Generally, older property tends to have lower sale price.
+
+### Is there a Correlation between Living Area and Sale Price
+
+```{r}
+livarea_price_corr <- cor(train_processed$GrLivArea, train_processed$SalePrice)
+
+ggplot(train_processed, aes(x = GrLivArea, y = SalePrice, color = GrLivArea)) +
+  geom_point() +
+  labs(title = "Scatter Plot of Living Area (above grade) vs SalePrice",
+       x = "Living Area (above grade)",
+       y = "Sale Price") +
+  geom_smooth(method = "lm") +
+  theme_minimal()
+```
+
+Correlation between Living Area (above grade) and Sale Price is `r round(livarea_price_corr,4)`.
+
+Property with larger living area (above grade) tends to have higher sale price.
+
+### Does price change year to year?
+
+```{r}
+# train %>%
+#   ggplot(aes(x = factor(YrSold), y = SalePrice)) +
+#   geom_boxplot(color = 'green', fill = 'green', alpha = 0.5) +
+#   geom_line(data = train %>%
+#               group_by(YrSold) %>%
+#               summarize(mean_price = mean(SalePrice)),
+#             aes(x = factor(YrSold), y = mean_price),
+#             color = 'purple', size = 1) +
+#   geom_point(data = train %>%
+#                group_by(YrSold) %>%
+#                summarize(mean_price = mean(SalePrice)),
+#              aes(x = factor(YrSold), y = mean_price),
+#              color = 'white', size = 3) +
+#   geom_text(data = train %>%
+#               group_by(YrSold) %>%
+#               summarize(mean_price = mean(SalePrice)),
+#             aes(x = factor(YrSold), y = mean_price, label = sprintf("$%.0f", mean_price)),
+#             vjust = -0.5, color = 'white') +
+#   labs(title = 'Sale Price Trends Over the Years',
+#        x = 'Year Sold',
+#        y = 'Sale Price') +
+#   theme_minimal() +
+#   # theme(plot.background = element_rect(fill = '#1F1F1F'),
+#   #       panel.background = element_rect(fill = '#1F1F1F'),
+#   #       text = element_text(color = 'white'))
+
+```
+
+```{r}
+# Interactive plotly version
+train_processed %>%
+  plot_ly(x = ~factor(YrSold), y = ~SalePrice, type = 'box', boxpoints = FALSE, marker = list(color = 'green')) %>%
+  add_trace(data = train_processed %>%
+              group_by(YrSold) %>%
+              summarize(mean_price = mean(SalePrice)),
+            x = ~factor(YrSold), y = ~mean_price, type = 'scatter', mode = 'lines', line = list(color = 'purple', width = 4)) %>%
+  add_trace(data = train_processed %>%
+               group_by(YrSold) %>%
+               summarize(mean_price = mean(SalePrice)),
+             x = ~factor(YrSold), y = ~mean_price, type = 'scatter', mode = 'markers', marker = list(color = 'white', size = 10)) %>%
+  layout(title = 'Sale Price Trends Over the Years',
+         xaxis = list(title = 'Year Sold'),
+         yaxis = list(title = 'Sale Price'),
+         plot_bgcolor = 'rgb(30,30,30)',
+         paper_bgcolor = 'rgb(30,30,30)',
+         font = list(color = 'white'))
+
+```
+
+
+In general, the average mean price does not change over year from 2006 to 2010, indicated by the data point and trend line. However, the standard deviations are high in every year, largest in 2007, which is prior the **Great Recession**. 
+
+
+# Model Fitting
+
+## Regression Tree
+
+```{r}
+library(rsample)
+
+set.seed(1)
+split <-  initial_split(train_processed, prop = 3/4)
+
+prop_train <- training(split)
+prop_test <- testing(split)
+```
+
+```{r}
+library(ranger)
+library(xgboost)
+library(yardstick)
+
+reg_rf <- ranger(formula = SalePrice ~ ., 
+                 data = prop_train[complete.cases(prop_train),],
+                 mtry = floor((ncol(prop_train) - 1) / 3),
+                 importance = "impurity",
+                 seed = 123,
+                 num.trees = 500)
+
+# Remove rows with missing values
+prop_train <- prop_train[complete.cases(prop_train), ]
+
+# Fit the random forest model using the alternative interface
+reg_rf <- ranger(x = prop_train[, -which(names(prop_train) == "SalePrice")],
+                 y = prop_train$SalePrice,
+                 mtry = floor((ncol(prop_train) - 1) / 3),
+                 importance = "impurity",
+                 seed = 123,
+                 num.trees = 500)
+
+
+
+reg_xgb <- xgboost(data = model.matrix(~ . - SalePrice, data = prop_train)[, -1],
+                   label = prop_train$SalePrice,
+                   max.depth = 2,
+                   eta = 1,
+                   nrounds = 10,
+                   verbose = 0)
+
+list(randomforest = reg_rf,
+     xgboost = reg_xgb) %>% 
+  imap_dfr(function(model, name) {
+    prop_test[complete.cases(prop_test), ] %>% 
+      mutate(pred = switch(name,
+                           randomforest = predict(model, .)$predictions,
+                           xgboost = predict(model, model.matrix(~ . - SalePrice, data = .)[, -1]))) %>% 
+      metric_set(rmse, mae, mape)(., SalePrice, pred) %>% 
+      mutate(name = name) %>% 
+      pivot_wider(id_cols = name, names_from = .metric, values_from = .estimate)
+  })
+```
+
+
+
+
+```{r}
+library(tidymodels)
+
+# Create a recipe for preprocessing
+data_recipe <- recipe(SalePrice ~ ., data = combined_data) %>% 
+  # Convert categorical variables to dummy variables
+  step_dummy(all_nominal_predictors()) %>% 
+  # Signal that preprocessing is done
+  prep()
+
+# Preprocess the combined data
+combined_data <- data_recipe %>% 
+  bake(new_data = NULL)
+
+# Split the preprocessed data back into train and test sets
+n_train <- nrow(train)
+train_processed <- combined_data[1:n_train, ]
+test_processed <- combined_data[(n_train + 1):nrow(combined_data), ]
+test_processed <- test_processed %>%
+  select(-SalePrice)
+
+# Remove rows with missing values
+train_processed <- train_processed[complete.cases(train_processed), ]
+test_processed <- test_processed[complete.cases(test_processed), ]
+
+# Fit the random forest model using the alternative interface
+reg_rf <- ranger(x = train_processed[, -which(names(train_processed) == "SalePrice")],
+                 y = train_processed$SalePrice,
+                 mtry = floor((ncol(train_processed) - 1) / 3),
+                 importance = "impurity",
+                 seed = 123,
+                 num.trees = 500)
+
+# Predict SalePrice using the trained random forest model
+test_processed <- test_processed %>%
+  mutate(SalePrice = predict(reg_rf, data = .)$predictions)
+
+```
+
+```{r}
+submit <- test_processed %>%
+  select(Id, SalePrice)
+
+write_csv(submit, file=here::here("data/submission.csv"))
+```
+
+
+
+
+
